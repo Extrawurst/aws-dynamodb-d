@@ -51,7 +51,7 @@ static DynamoDBApi createDynamoDBApi(string credentials,string signedheaders,str
 	import vibe.web.rest:RestInterfaceClient;
 	import vibe.http.client:HTTPClientRequest;
 
-	auto res = new RestInterfaceClient!DynamoDBApi("https://dynamodb.eu-west-1.amazonaws.com");
+	auto res = new RestInterfaceClient!DynamoDBApi("https://dynamodb.eu-central-1.amazonaws.com");
 
 	return res;
 }
@@ -84,14 +84,14 @@ unittest
 }
 
 enum service = "dynamodb";
-enum host = "dynamodb.eu-west-1.amazonaws.com";
-enum region = "eu-west-1";
-enum endpoint = "https://dynamodb.eu-west-1.amazonaws.com/";
+enum host = "dynamodb.eu-central-1.amazonaws.com";
+enum region = "eu-central-1";
+enum endpoint = "https://dynamodb.eu-central-1.amazonaws.com/";
 
 void main()
 {
 	//DynamoDBApi api = new RestInterfaceClient!DynamoDBApi("http://dynamodb.eu-west-1.amazonaws.com");
-
+	import std.string;
 	GetItemInput input;
 	input.tableName = "alexa-telly-users";
 	input.key["user-id"] = AttributeValue("bar");
@@ -100,45 +100,57 @@ void main()
 	auto contentType = "application/x-amz-json-1.0";
 	enum canonicalUri = '/';
 
-	auto accessKey = "AKIAJIY7V4K3CSXMQODQ";
-	auto secretKey = "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";
+	auto accessKey = "";
+	auto secretKey = "";
 
 	auto time = Clock.currTime;
-	auto amzDate = (cast(DateTime)time).toISOString();
-	auto dateStamp = (cast(Date)time).toISOString();
+	auto amzDate = (cast(DateTime)time.toUTC()).toISOString() ~ "Z";
+	writeln(amzDate);
+	auto dateStamp = (cast(Date)time.toUTC()).toISOString();
+	writeln(dateStamp);
+	
 
 	requestHTTP(endpoint,
-		(scope req) {
+		(scope HTTPClientRequest req) {
 			import std.digest.sha:SHA256;
 			import std.digest.digest:digest,toHexString;
+			import std.string;
+			req.method = HTTPMethod.POST;
+			
+			//auto requestParameters = serializeToJson(input).toPrettyString();
+			//writeln(requestParameters);
+			auto amzTarget = "DynamoDB_20120810.CreateTable";
 
-			auto requestParameters = serializeToJson(input).toPrettyString();
-
-			auto amzTarget = "DynamoDB_20120810.GetItem";
-
-			auto canonicalHeaders = .format("content-type: %s\nhost: %s\nx-amz-date: %s\nx-amz-target: %s\n",
-				contentType,host,amzDate,amzTarget);
+			auto canonicalHeaders = .format("content-type:%s\nhost:%s\nx-amz-date:%s\nx-amz-target:%s\n",contentType,host,amzDate,amzTarget);
 			enum signedHeaders = "content-type;host;x-amz-date;x-amz-target";
 
-			auto canonicalQuerystring = "Action=CreateUser&UserName=NewUser&Version=2010-05-08";
-			canonicalQuerystring ~= "&X-Amz-Algorithm=AWS4-HMAC-SHA256";
-			canonicalQuerystring ~= "&X-Amz-Credential=" ~ urllib.quote_plus(access_key + '/' + credential_scope);
-
-canonical_querystring += '&X-Amz-Credential=' + urllib.quote_plus(access_key + '/' + credential_scope)
-canonical_querystring += '&X-Amz-Date=' + amz_date
-canonical_querystring += '&X-Amz-Expires=30'
-canonical_querystring += '&X-Amz-SignedHeaders=' + signed_headers
-
-			auto payloadHash = digest!SHA256(requestParameters).toHexString();
-
-			auto canonical_request = .format("POST\n%s\n%s\n",canonicalUri,canon);
-			method + '\n' + canonical_uri + '\n' + canonical_querystring + '\n' + canonical_headers + '\n' + signed_headers + '\n' + payload_hash
-
+			auto request_parameters =  "{";
+			request_parameters ~=  "\"KeySchema\": [{\"KeyType\": \"HASH\",\"AttributeName\": \"Id\"}],";
+			request_parameters ~=  "\"TableName\": \"TestTable\",\"AttributeDefinitions\": [{\"AttributeName\": \"Id\",\"AttributeType\": \"S\"}],";
+			request_parameters ~=  "\"ProvisionedThroughput\": {\"WriteCapacityUnits\": 5,\"ReadCapacityUnits\": 5}";
+			request_parameters ~=  "}";
+			auto canonicalQuerystring = "";
+			//writeln(request_parameters);
+		
+			auto payloadHash = digest!SHA256(request_parameters).toHexString().toLower();
+			//writeln(request_parameters);
+			//writeln(payloadHash);
+			auto canonical_request = .format("POST\n%s\n%s\n%s\n%s\n%s",canonicalUri,canonicalQuerystring,canonicalHeaders,signedHeaders,payloadHash);
+			writeln("Canonical:"~canonical_request);
+			
+			string algorithm = "AWS4-HMAC-SHA256";
+			string credential_scope = dateStamp ~ "/" ~ region ~ "/" ~ service ~ "/" ~ "aws4_request";
+			auto sha = digest!SHA256(canonical_request).toHexString().toLower();
+			writeln(sha);
+			string string_to_sign = .format("%s\n%s\n%s\n%s",algorithm, amzDate, credential_scope, sha);
+			writeln(string_to_sign);
 			auto signature = createAwsSigning(secretKey,dateStamp,region,service);
 			req.headers["Content-Type"] = contentType;
-			req.headers["Authorization"] = .format("AWS4-HMAC-SHA256 Credential=%s, SignedHeaders=%s, Signature=%s",
-				credentials,signedheaders,signature);
+			req.headers["Authorization"] = .format("AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",accessKey,credential_scope,signedHeaders,signature);
 			req.headers["X-Amz-Target"] = amzTarget;
+			req.headers["X-Amz-Date"] = amzDate;
+
+			req.writeBody(cast(ubyte[])request_parameters);
 		},
 		(scope res) {
 			logInfo("Response: %s", res.bodyReader.readAllUTF8());
