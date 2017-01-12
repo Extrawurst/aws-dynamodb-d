@@ -77,11 +77,37 @@ string createAwsSigning(string secret, string date, string region, string servic
 }
 
 ///
+string signAwsString(string string_to_sign, string signKey)
+{
+	import std.digest.hmac;
+	import std.digest.sha;
+	import std.digest.digest:toHexString,LetterCase;
+	logInfo("String to sign: \n"~string_to_sign);
+	logInfo("SignKey: \n"~signKey);
+	auto signed = string_to_sign.representation.hmac!SHA256(string_to_sign.representation);
+	return to!string(signed);
+
+}
+
+/// http://docs.aws.amazon.com/general/latest/gr/sigv4-create-string-to-sign.html
 unittest
 {
 	immutable key = createAwsSigning("wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY","20150830","us-east-1","iam");
 	assert(key == "c4afb1cc5771d871763a393e44b703571b55cc28424d1a5e86da6ed3c154a4b9");
 }
+
+/// http://docs.aws.amazon.com/general/latest/gr/sigv4-create-string-to-sign.html
+unittest
+{
+	
+	immutable string_to_sign = .format("%s\n%s\n%s\n%s","AWS4-HMAC-SHA256","20150830T123600Z","20150830/us-east-1/iam/aws4_request","f536975d06c0309214f805bb90ccff089219ecd68b2577efef23edd43b7e1a59");
+	immutable key = createAwsSigning("wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY","20150830","us-east-1","iam");
+	immutable signed = signAwsString(string_to_sign,key);
+	writeln(signed);
+	assert(signed=="5d672d79c15b13162d9279b0855cfba6789a8edb4c82c400e06b5924a6f2b5d7");
+
+}
+
 
 enum service = "dynamodb";
 enum host = "dynamodb.eu-central-1.amazonaws.com";
@@ -98,7 +124,7 @@ void main()
 	//writefln("%s",api.GetItem(input));
 
 	auto contentType = "application/x-amz-json-1.0";
-	enum canonicalUri = '/';
+	enum canonicalUri = "/";
 
 	import std.process:environment;
 	immutable accessKey = environment["AWS_ACCESS_KEY"];
@@ -107,30 +133,32 @@ void main()
 
 	auto time = Clock.currTime;
 	auto amzDate = (cast(DateTime)time.toUTC()).toISOString() ~ "Z";
-	writeln(amzDate);
+	writeln("Amazon Date:"~amzDate);
 	auto dateStamp = (cast(Date)time.toUTC()).toISOString();
-	writeln(dateStamp);
+	writeln("Date stamp: "~dateStamp);
 	
 
 	requestHTTP(endpoint,
 		(scope HTTPClientRequest req) {
 			import std.digest.sha:SHA256;
-			import std.digest.digest:digest,toHexString;
+			import std.digest.hmac;
+			import std.digest.digest:digest,toHexString,LetterCase;
 			import std.string;
 			req.method = HTTPMethod.POST;
 			
-			//auto requestParameters = serializeToJson(input).toPrettyString();
+			//auto request_parameters = serializeToJson(input).toPrettyString();
 			//writeln(requestParameters);
 			auto amzTarget = "DynamoDB_20120810.CreateTable";
 
 			auto canonicalHeaders = .format("content-type:%s\nhost:%s\nx-amz-date:%s\nx-amz-target:%s\n",contentType,host,amzDate,amzTarget);
 			enum signedHeaders = "content-type;host;x-amz-date;x-amz-target";
-
+			
 			auto request_parameters =  "{";
 			request_parameters ~=  "\"KeySchema\": [{\"KeyType\": \"HASH\",\"AttributeName\": \"Id\"}],";
 			request_parameters ~=  "\"TableName\": \"TestTable\",\"AttributeDefinitions\": [{\"AttributeName\": \"Id\",\"AttributeType\": \"S\"}],";
 			request_parameters ~=  "\"ProvisionedThroughput\": {\"WriteCapacityUnits\": 5,\"ReadCapacityUnits\": 5}";
 			request_parameters ~=  "}";
+			//request_parameters =  "";
 			auto canonicalQuerystring = "";
 			//writeln(request_parameters);
 		
@@ -138,21 +166,27 @@ void main()
 			//writeln(request_parameters);
 			//writeln(payloadHash);
 			auto canonical_request = .format("POST\n%s\n%s\n%s\n%s\n%s",canonicalUri,canonicalQuerystring,canonicalHeaders,signedHeaders,payloadHash);
-			writeln("Canonical:"~canonical_request);
+			writeln("Canonical request:\n"~canonical_request);
 			
 			string algorithm = "AWS4-HMAC-SHA256";
-			string credential_scope = dateStamp ~ "/" ~ region ~ "/" ~ service ~ "/" ~ "aws4_request";
+			string credential_scope = .format("%s/%s/%s/aws4_request",dateStamp, region, service);
 			auto sha = digest!SHA256(canonical_request).toHexString().toLower();
-			writeln(sha);
-			string string_to_sign = .format("%s\n%s\n%s\n%s",algorithm, amzDate, credential_scope, sha);
-			writeln(string_to_sign);
-			auto signature = createAwsSigning(secretKey,dateStamp,region,service);
-			req.headers["Content-Type"] = contentType;
-			req.headers["Authorization"] = .format("AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",accessKey,credential_scope,signedHeaders,signature);
-			req.headers["X-Amz-Target"] = amzTarget;
-			req.headers["X-Amz-Date"] = amzDate;
+			writeln("PayloadHash:\n"~sha);
+			import std.utf;
+			auto string_to_sign = .format("%s\n%s\n%s\n%s",algorithm, amzDate, credential_scope, sha).toUTF8();
+			writeln("String to sign:\n"~ string_to_sign);
 
-			req.writeBody(cast(ubyte[])request_parameters);
+			auto signatureKey = createAwsSigning(secretKey,dateStamp,region,service);
+			auto signature = signAwsString(string_to_sign,signatureKey);
+
+			writeln("Signature:\n"~to!string(signature));
+			req.headers["Content-Type"] = contentType;
+			req.headers["X-Amz-Date"] = amzDate;
+			req.headers["X-Amz-Target"] = amzTarget;
+			req.headers["Authorization"] = .format("AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",accessKey,credential_scope,signedHeaders,signature);
+			req.writeJsonBody(cast(ubyte[])request_parameters);
+			req.contentType = contentType;
+			writeln("Type"~req.contentType);
 		},
 		(scope res) {
 			logInfo("Response: %s", res.bodyReader.readAllUTF8());
