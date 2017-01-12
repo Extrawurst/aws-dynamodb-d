@@ -100,8 +100,10 @@ void main()
 	auto contentType = "application/x-amz-json-1.0";
 	enum canonicalUri = '/';
 
-	auto accessKey = "";
-	auto secretKey = "";
+	import std.process:environment;
+	immutable accessKey = environment["AWS_ACCESS_KEY"];
+	immutable secretKey = environment["AWS_SECRET_KEY"];
+	//TODO add error handling on empty/not set keys
 
 	auto time = Clock.currTime;
 	auto amzDate = (cast(DateTime)time.toUTC()).toISOString() ~ "Z";
