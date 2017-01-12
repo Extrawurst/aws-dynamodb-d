@@ -84,8 +84,10 @@ string signAwsString(string string_to_sign, string signKey)
 	import std.digest.digest:toHexString,LetterCase;
 	logInfo("String to sign: \n"~string_to_sign);
 	logInfo("SignKey: \n"~signKey);
-	auto signed = string_to_sign.representation.hmac!SHA256(string_to_sign.representation);
-	return to!string(signed);
+	auto key = signKey.representation;
+
+	auto signed = string_to_sign.representation.hmac!SHA256(key);
+	return signed.toHexString!(LetterCase.lower).dup;
 
 }
 
